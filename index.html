@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Swagger Validator</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f5f9; color: #1c2738; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { width: min(100% - 32px, 1100px); margin: 40px auto; }
+    h1 { margin: 0; font-size: 28px; }
+    .subtitle { margin: 6px 0 24px; color: #66758a; }
+    .card { background: white; border: 1px solid #e0e6ee; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 4px 16px rgba(30, 48, 76, .04); }
+    .heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    h2 { margin: 0; font-size: 17px; }
+    .hint { color: #738196; font-size: 13px; }
+    textarea { display: block; width: 100%; min-height: 240px; resize: vertical; padding: 14px; border: 1px solid #ccd5e1; border-radius: 8px; background: #fbfcfe; color: #253348; font: 13px/1.6 Consolas, Monaco, monospace; tab-size: 2; }
+    textarea:focus { outline: 2px solid #a9c5ff; border-color: #4b7de0; }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+    button { border: 0; border-radius: 8px; padding: 10px 18px; background: #315fd3; color: white; font: inherit; font-weight: 600; cursor: pointer; }
+    button:hover { background: #264fb9; }
+    button:focus-visible { outline: 3px solid #a9c5ff; outline-offset: 2px; }
+    .status { color: #66758a; }
+    .status.error { color: #bd303a; }
+    .status.success { color: #23774d; }
+    .result { min-height: 220px; max-height: 600px; overflow: auto; border: 1px solid #e0e6ee; border-radius: 8px; background: #fbfcfe; }
+    .placeholder { padding: 20px; color: #8a97a8; }
+    .code { display: table; min-width: 100%; margin: 0; padding: 12px 0; font: 13px/1.6 Consolas, Monaco, monospace; }
+    .line { display: table-row; }
+    .number { display: table-cell; width: 1%; padding: 0 14px; text-align: right; color: #96a3b4; border-right: 1px solid #e5eaf0; user-select: none; }
+    .content { display: table-cell; padding: 0 16px; white-space: pre; }
+    .line.critical { background: #ffebed; box-shadow: inset 3px 0 #d63848; }
+    .line.approval { background: #fff2df; box-shadow: inset 3px 0 #df8b18; }
+    .line.warning { background: #fffadb; box-shadow: inset 3px 0 #c1a11b; }
+    .issues { display: grid; gap: 10px; }
+    details { border: 1px solid #e0e6ee; border-left: 4px solid; border-radius: 8px; background: #fff; }
+    details.critical { border-left-color: #d63848; }
+    details.approval { border-left-color: #df8b18; }
+    details.warning { border-left-color: #c1a11b; }
+    summary { cursor: pointer; padding: 12px 14px; font-weight: 600; }
+    .badge { display: inline-block; margin-left: 8px; font-size: 12px; font-weight: 600; }
+    .critical .badge { color: #b32635; }
+    .approval .badge { color: #a75e00; }
+    .warning .badge { color: #897000; }
+    .issue-body { padding: 0 14px 14px; color: #47566b; }
+    .issue-body p { margin: 4px 0 8px; }
+    .issue-body a { color: #315fd3; }
+    @media (max-width: 600px) { main { margin: 20px auto; } .card { padding: 16px; } h1 { font-size: 23px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Swagger Validator</h1>
+    <p class="subtitle">Проверка и просмотр Swagger JSON</p>
+
+    <section class="card" aria-labelledby="input-title">
+      <div class="heading">
+        <h2 id="input-title">Swagger JSON</h2>
+        <span class="hint">Вставьте содержимое JSON-файла</span>
+      </div>
+      <textarea id="input" aria-labelledby="input-title" placeholder='{"openapi": "3.0.0", ...}' spellcheck="false"></textarea>
+      <div class="actions">
+        <button id="validate" type="button">Провалидировать</button>
+        <span id="status" class="status" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="issues-title">
+      <div class="heading">
+        <h2 id="issues-title">Замечания</h2>
+        <span class="hint">Сначала критичные, затем требующие согласования с ИБ и предупреждения</span>
+      </div>
+      <div id="issues" class="issues"><div class="placeholder">Здесь появятся замечания</div></div>
+      <p class="hint">Проверяется часть правил справочника для Swagger 2.0 и OpenAPI 3.x. Полная проверка схем OpenAPI и конфигурации Tyk не выполняется.</p>
+    </section>
+
+    <section class="card" aria-labelledby="result-title">
+      <div class="heading">
+        <h2 id="result-title">Результат валидации</h2>
+        <span class="hint">Форматированный JSON с нумерацией строк</span>
+      </div>
+      <div id="result" class="result" aria-label="Результат">
+        <div class="placeholder">Здесь появится результат проверки</div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const input = document.getElementById('input');
+    const status = document.getElementById('status');
+    const result = document.getElementById('result');
+    const issues = document.getElementById('issues');
+
+    // Правила основаны на описаниях справочника; идентификатор позволяет отличить
+    // одноимённые правила и сохранить связь с исходной таблицей.
+    const rules = {
+      infoDescription: ['Описание раздела info', 'Требует согласования с ИБ', 'В разделе info должен быть указан непустой description.'],
+      contact: ['Contact в разделе info', 'Предупреждение', 'В разделе info должно быть указано contact.'],
+      contactUrl: ['URL в разделе contact', 'Предупреждение', 'В разделе contact должно быть указано url.'],
+      contactName: ['Name в разделе contact', 'Предупреждение', 'В разделе contact должно быть указано name.'],
+      contactEmail: ['Email в разделе contact', 'Предупреждение', 'В разделе contact должно быть указано email.'],
+      base: ['Описание сервиса спецификации (servers или basePath)', 'Критичная', 'Должен быть указан basePath для Swagger 2.0 или servers для OpenAPI 3.'],
+      uuid: ['Формат uuid для полей типа string', 'Критичная', 'Для string запрещён format: uuid; используйте pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$.'],
+      baseVersion: ['Базовый путь для oas2', 'Критичная', 'basePath должен оканчиваться на /v{version}.'],
+      serverVersion: ['Ограничение URL-адреса в разделе servers', 'Предупреждение', 'Каждый URL сервера должен оканчиваться на /v{version}.'],
+      serverLower: ['Использование lower case формата', 'Предупреждение', 'Маршрут URL сервера должен быть в нижнем регистре.'],
+      serverUrl: ['Некорректность URL-адреса в разделе servers', 'Критичная', 'URL сервера указан некорректно.'],
+      serverHttps: ['Протокол https для среды', 'Критичная', 'Для сред PROD, DSO, IFT и PREPROD необходимо использовать только https.'],
+      environments: ['Описание раздела servers', 'Предупреждение', 'В servers должны присутствовать среды DSO, IFT, PREPROD и PROD в description.'],
+      version: ['Описание версии в спецификации', 'Критичная', 'Версия в info должна быть указана в формате major.minor.patch.'],
+      numeric: ['Ограничение числового типа параметра', 'Критичная', 'Для integer или number должен быть указан enum либо minimum и maximum.'],
+      string: ['Используемые свойства для строкового типа параметра', 'Требует согласования с ИБ', 'Для string необходимо указать maxLength, enum, format date/date-time или pattern.'],
+      length: ['Ограничение строкового типа параметра в количестве символов', 'Требует согласования с ИБ', 'maxLength не должен превышать 255 без согласования с ИБ.'],
+      array: ['Ограничение enum', 'Критичная', 'Для массива необходимо непустое items; при неоднородных элементах необходимо additionalItems: false.'],
+      object: ['Ограничение типа object', 'Требует согласования с ИБ', 'Для object укажите additionalProperties: false либо схему дополнительных свойств.'],
+      maxProperties: ['Ограничение additionalProperties', 'Требует согласования с ИБ', 'Если additionalProperties разрешены схемой, необходимо указать maxProperties.'],
+      emptyObject: ['Описание атрибутов объекта', 'Предупреждение', 'Опишите схему объекта в properties или схему дополнительных атрибутов в additionalProperties.'],
+      intMax: ['Ограничение максимального значения для числового типа параметра', 'Критичная', 'Для integer значение maximum должно быть от -999999999999999 до 999999999999999.'],
+      intMin: ['Ограничение минимального значения для числового типа параметра', 'Критичная', 'Для integer значение minimum должно быть от -999999999999999 до 999999999999999.'],
+      range: ['Ограничение макс. и мин. значения для числового типа параметра', 'Критичная', 'Для integer значение maximum должно быть больше minimum.'],
+      defaultRange: ['Ограничение свойства default', 'Критичная', 'default должен быть больше либо равен minimum и меньше либо равен maximum.'],
+      minItems: ['Ограничение минимального значения в enum', 'Критичная', 'В массивах minItems должен быть больше либо равен нулю.'],
+      maxItems: ['Ограничение максимального значения в enum', 'Критичная', 'В массивах должен присутствовать ненулевой maxItems.'],
+      itemsRange: ['Ограничение макс. и мин. значения в enum', 'Критичная', 'В массивах maxItems должен быть больше minItems.'],
+      file: ['Передача файлов', 'Критичная', 'Передачу файлов необходимо осуществлять через файловый сервис.'],
+      titleLength: ['Ограничение title', 'Предупреждение', 'Длина поля title не должна превышать 64 символа.'],
+      operationDescription: ['Описание для метода существует', 'Критичная', 'Для каждого метода description должен присутствовать и быть непустой строкой.'],
+      operationSummary: ['Описание методов спецификации API', 'Требует согласования с ИБ', 'Методы должны содержать описание с использованием summary или description.'],
+      operationId: ['Свойство operationId для метода существует', 'Критичная', 'Каждый метод должен иметь operationId.'],
+      uniqueId: ['Ограничение operationId для метода', 'Критичная', 'Каждый метод должен иметь уникальный operationId.'],
+      validId: ['Ограничение operationId в URL-адресе', 'Критичная', 'OperationId не должен содержать символов, недопустимых в URL.'],
+      operationTags: ['Свойство tags для метода существует', 'Предупреждение', 'Метод должен иметь непустой массив tags.'],
+      tagDefined: ['Теги операций', 'Предупреждение', 'Теги операций должны быть определены в глобальных тегах.'],
+      response: ['Ошибка проектирования блока responces', 'Критичная', 'Метод должен содержать хотя бы один ответ 2xx или 3xx.'],
+      body: ['Ограничение тела запроса', 'Требует согласования с ИБ', 'Для POST, PUT и PATCH блок requestBody не может быть пустым.'],
+      noBody: ['Тело для GET или DELETE', 'Требует согласования с ИБ', 'GET и DELETE не должны содержать тело запроса.'],
+      duplicateParameter: ['Ограничение parameters для метода', 'Критичная', 'Параметры операции не должны повторяться.'],
+      parameterDescription: ['Описание объекта parameter', 'Требует согласования с ИБ', 'Объект parameter должен иметь description.'],
+      pathParameter: ['Свойство parameters заполнены', 'Критичная', 'Параметры пути должны быть определены и действительны.'],
+      pathEmpty: ['Свойство parameters для пути существует', 'Критичная', 'Объявления параметров пути не должны быть пустыми.'],
+      pathSlash: ['Ограничение paths, косая черта', 'Критичная', 'Путь не должен заканчиваться косой чертой.'],
+      pathQuery: ['Ограничение paths, запрос', 'Критичная', 'Путь не должен включать строку запроса.'],
+      content: ['Ограничение content', 'Критичная', 'Блок content не должен содержать /*/.'],
+      duplicateEnum: ['Уникальные записи enum', 'Предупреждение', 'Значения enum не должны повторяться.'],
+      typedEnum: ['Соответствие типу данных записей в enum', 'Критичная', 'Значения enum должны соответствовать указанному типу.'],
+      eval: ['Исполняемая функция в описании', 'Критичная', 'В описаниях и заголовках не должно быть eval(.'],
+      script: ['Исполняемый скрипт в описании', 'Критичная', 'В описаниях и заголовках не должно быть тега script.'],
+      ref: ['Ограничение $ref', 'Критичная', 'Другие свойства не должны использоваться вместе с $ref.'],
+      anyOf: ['Ограничение anyOf для формата oas2', 'Критичная', 'Ключевое слово anyOf нельзя использовать в OpenAPI v2.'],
+      oneOf: ['Ограничение oneOf для формата oas2', 'Критичная', 'Ключевое слово oneOf нельзя использовать в OpenAPI v2.'],
+      security: ['Ограничение операции security', 'Критичная', 'Значения security должны соответствовать определённым схемам безопасности.'],
+      host: ['Объект servers существует', 'Критичная', 'Для Swagger 2.0 необходимо указать host.'],
+      schemes: ['Объект schemes существует', 'Критичная', 'Для Swagger 2.0 необходимо указать непустой schemes.'],
+      trailing: ['Ограничение URL-адрес, косая черта', 'Критичная', 'URL сервера не должен заканчиваться косой чертой.'],
+      naming: ['Использование UpperCamelCase', 'Предупреждение', 'Названия типов должны быть исполнены в UpperCamelCase.'],
+      tyk: ['Ошибка конфигурации API. Схема не найдена', 'Критичная', 'Не найдена конфигурация для Tyk.'],
+      infoContact: ['Есть в ВТБ', 'Критичная', 'Объект info должен иметь contact.'],
+      infoContactProperties: ['Есть в ВТБ', 'Критичная', 'Объект contact должен иметь name, url и email.'],
+      infoDescriptionCritical: ['Есть в ВТБ', 'Критичная', 'Для объекта info свойство description должно быть непустым.']
+    };
+    const severity = { 'Критичная': 'critical', 'Требует согласования с ИБ': 'approval', 'Предупреждение': 'warning' };
+    const rank = { critical: 0, approval: 1, warning: 2 };
+    const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+    const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const hasContents = value => isObject(value) && Object.keys(value).length > 0;
+    const pointer = path => JSON.stringify(path);
+
+    function validateDocument(doc) {
+      const found = [];
+      const add = (rule, path, detail = '') => found.push({ rule, path, detail, level: severity[rules[rule][1]] });
+      const oas2 = doc && doc.swagger === '2.0';
+      const oas3 = doc && typeof doc.openapi === 'string' && /^3\.(0|1)\.\d+/.test(doc.openapi);
+      if (!isObject(doc) || (!oas2 && !oas3)) return { found, supported: false };
+      const info = isObject(doc.info) ? doc.info : {};
+      const contact = isObject(info.contact) ? info.contact : {};
+      if (!nonempty(info.description)) { add('infoDescription', ['info']); add('infoDescriptionCritical', ['info']); }
+      if (!isObject(info.contact)) { add('contact', ['info']); add('infoContact', ['info']); }
+      for (const [field, rule] of [['url', 'contactUrl'], ['name', 'contactName'], ['email', 'contactEmail']]) {
+        if (!nonempty(contact[field])) add(rule, isObject(info.contact) ? ['info', 'contact'] : ['info']);
+      }
+      if (!['name', 'url', 'email'].every(key => nonempty(contact[key]))) add('infoContactProperties', isObject(info.contact) ? ['info', 'contact'] : ['info']);
+      if (!/^\d+\.\d+\.\d+$/.test(info.version || '')) add('version', ['info', 'version']);
+      if (typeof info.title === 'string' && info.title.length > 64) add('titleLength', ['info', 'title']);
+      if (!hasContents(doc['x-tyk-configuration'])) add('tyk', []);
+      if (oas2) {
+        if (!nonempty(doc.basePath)) add('base', []);
+        else if (!/\/v\d+$/.test(doc.basePath)) add('baseVersion', ['basePath']);
+        if (!nonempty(doc.host)) add('host', []);
+        else if (doc.host.endsWith('/')) add('trailing', ['host']);
+        if (!Array.isArray(doc.schemes) || !doc.schemes.length) add('schemes', []);
+      } else {
+        if (!Array.isArray(doc.servers) || !doc.servers.length) add('base', []);
+        const servers = Array.isArray(doc.servers) ? doc.servers : [];
+        const descriptions = servers.map(s => String(s && s.description || '').toUpperCase());
+        const missing = ['DSO', 'IFT', 'PREPROD', 'PROD'].filter(env => !descriptions.some(d => new RegExp('\\b' + env + '\\b').test(d)));
+        if (missing.length) add('environments', ['servers'], 'Отсутствуют: ' + missing.join(', '));
+        servers.forEach((server, i) => {
+          if (!isObject(server)) return;
+          const path = ['servers', i, 'url'], url = server.url;
+          if (!nonempty(url)) { add('serverUrl', path); return; }
+          // OpenAPI допускает относительные URL и переменные сервера.
+          try { new URL(url.replace(/\{[^{}]+\}/g, 'variable'), 'https://example.invalid'); }
+          catch (_) { add('serverUrl', path); }
+          const route = url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '').split(/[?#]/)[0];
+          if (route !== route.toLowerCase()) add('serverLower', path);
+          if (!/\/v\d+$/.test(route)) add('serverVersion', path);
+          if (url.endsWith('/')) add('trailing', path);
+          if (/\b(DSO|IFT|PREPROD|PROD)\b/i.test(server.description || '') && !/^https:\/\//i.test(url)) add('serverHttps', path);
+        });
+      }
+
+      const ids = new Set();
+      const globalTags = new Set((Array.isArray(doc.tags) ? doc.tags : []).map(tag => tag && tag.name));
+      const securityDefs = oas2 ? doc.securityDefinitions : doc.components && doc.components.securitySchemes;
+      function checkSecurity(value, path) {
+        if (!Array.isArray(value)) return;
+        value.forEach((entry, i) => { if (isObject(entry)) Object.keys(entry).forEach(name => {
+          if (!isObject(securityDefs) || !Object.prototype.hasOwnProperty.call(securityDefs, name)) add('security', path.concat(i, name));
+        }); });
+      }
+      checkSecurity(doc.security, ['security']);
+      const paths = isObject(doc.paths) ? doc.paths : {};
+      Object.entries(paths).forEach(([name, item]) => {
+        const pp = ['paths', name];
+        if (name.endsWith('/')) add('pathSlash', pp);
+        if (name.includes('?')) add('pathQuery', pp);
+        if (/\{\}/.test(name)) add('pathEmpty', pp);
+        if (!isObject(item)) return;
+        Object.entries(item).forEach(([method, op]) => {
+          if (!['get','put','post','delete','options','head','patch','trace'].includes(method) || !isObject(op)) return;
+          const p = pp.concat(method);
+          if (!nonempty(op.description)) add('operationDescription', p);
+          if (oas3 && !nonempty(op.summary) && !nonempty(op.description)) add('operationSummary', p);
+          if (!nonempty(op.operationId)) add('operationId', p);
+          else {
+            if (ids.has(op.operationId)) add('uniqueId', p.concat('operationId'));
+            ids.add(op.operationId);
+            if (encodeURIComponent(op.operationId) !== op.operationId) add('validId', p.concat('operationId'));
+          }
+          if (!Array.isArray(op.tags) || !op.tags.length) add('operationTags', p);
+          else op.tags.forEach((tag, i) => { if (!globalTags.has(tag)) add('tagDefined', p.concat('tags', i)); });
+          if (!isObject(op.responses) || !Object.keys(op.responses).some(key => /^[23](?:\d\d|XX)$/i.test(key))) add('response', p.concat('responses'));
+          if (oas3 && ['put','post','patch'].includes(method) && !hasContents(op.requestBody)) add('body', p);
+          if (oas3 && ['get','delete'].includes(method) && op.requestBody !== undefined) add('noBody', p.concat('requestBody'));
+          checkSecurity(op.security, p.concat('security'));
+          const params = Array.isArray(op.parameters) ? op.parameters : [];
+          const seen = new Set();
+          params.forEach((param, i) => {
+            if (!isObject(param) || param.$ref) return;
+            const key = JSON.stringify([param.name, param.in]);
+            if (seen.has(key)) add('duplicateParameter', p.concat('parameters', i));
+            seen.add(key);
+          });
+          const allParams = [...(Array.isArray(item.parameters) ? item.parameters : []), ...params];
+          // Не делаем вывод об отсутствующих параметрах, если встречаются ссылки.
+          if (!allParams.some(param => param && param.$ref)) {
+            for (const match of name.matchAll(/\{([^{}]+)\}/g)) {
+              if (!allParams.some(param => param && param.in === 'path' && param.name === match[1] && param.required === true)) add('pathParameter', p, 'Параметр: ' + match[1]);
+            }
+          }
+        });
+      });
+      const schemas = oas2 ? doc.definitions : doc.components && doc.components.schemas;
+      if (isObject(schemas)) Object.keys(schemas).forEach(name => {
+        if (!/^[A-Z][a-zA-Z0-9]*$/.test(name)) add('naming', (oas2 ? ['definitions'] : ['components','schemas']).concat(name));
+      });
+      function walk(value, path) {
+        if (!value || typeof value !== 'object') return;
+        if (Array.isArray(value)) { value.forEach((v, i) => walk(v, path.concat(i))); return; }
+        const section = path[0];
+        const inSchemaArea = section === 'paths' || (oas2 && ['parameters', 'definitions'].includes(section)) || (oas3 && section === 'components');
+        if (inSchemaArea) {
+          if (value.type === 'string' && value.format === 'uuid') add('uuid', path.concat('format'));
+          if (value.type === 'string') {
+            if (typeof value.maxLength === 'number' && value.maxLength > 255) add('length', path.concat('maxLength'));
+            if (value.maxLength === undefined && !(Array.isArray(value.enum) && value.enum.length) && !['date','date-time'].includes(value.format) && !nonempty(value.pattern)) add('string', path);
+          }
+          if (['integer','number'].includes(value.type) && !(Array.isArray(value.enum) && value.enum.length) && (typeof value.minimum !== 'number' || typeof value.maximum !== 'number')) add('numeric', path);
+          if (value.type === 'integer') {
+            if (typeof value.minimum === 'number' && Math.abs(value.minimum) > 999999999999999) add('intMin', path.concat('minimum'));
+            if (typeof value.maximum === 'number' && Math.abs(value.maximum) > 999999999999999) add('intMax', path.concat('maximum'));
+            if (typeof value.minimum === 'number' && typeof value.maximum === 'number' && value.maximum <= value.minimum) add('range', path);
+          }
+          if (typeof value.default === 'number' && ((typeof value.minimum === 'number' && value.default < value.minimum) || (typeof value.maximum === 'number' && value.default > value.maximum))) add('defaultRange', path.concat('default'));
+          if (value.type === 'array') {
+            if (!(hasContents(value.items) || (Array.isArray(value.items) && value.items.length))) add('array', path);
+            else if (Array.isArray(value.items) && value.additionalItems !== false) add('array', path);
+            if (section === 'components') {
+              if (typeof value.minItems === 'number' && value.minItems < 0) add('minItems', path.concat('minItems'));
+              if (typeof value.maxItems !== 'number' || value.maxItems <= 0) add('maxItems', path);
+              if (typeof value.minItems === 'number' && typeof value.maxItems === 'number' && value.maxItems <= value.minItems) add('itemsRange', path);
+            }
+          }
+          if (value.type === 'object') {
+            if (value.additionalProperties !== false && !hasContents(value.additionalProperties)) add('object', path);
+            if (hasContents(value.additionalProperties) && value.maxProperties === undefined) add('maxProperties', path);
+            if (!hasContents(value.properties) && !hasContents(value.additionalProperties)) add('emptyObject', path);
+          }
+          if (value.type === 'file' || (value.type === 'string' && value.format === 'binary')) add('file', path);
+          if (value.in && value.name && !value.$ref && !nonempty(value.description)) add('parameterDescription', path);
+        }
+        if (Array.isArray(value.enum)) {
+          const seen = new Set();
+          value.enum.forEach((v, i) => {
+            const key = JSON.stringify(v);
+            if (seen.has(key)) add('duplicateEnum', path.concat('enum', i));
+            seen.add(key);
+            const valid = value.type === 'integer' ? Number.isInteger(v) : value.type === 'number' ? typeof v === 'number' : value.type === 'array' ? Array.isArray(v) : value.type === 'object' ? isObject(v) : !value.type || typeof v === value.type;
+            if (!valid) add('typedEnum', path.concat('enum', i));
+          });
+        }
+        if ('$ref' in value && Object.keys(value).length > 1) add('ref', path);
+        for (const [key, child] of Object.entries(value)) {
+          const p = path.concat(key);
+          if (oas2 && key === 'anyOf') add('anyOf', p);
+          if (oas2 && key === 'oneOf') add('oneOf', p);
+          if (key === 'content' && isObject(child) && Object.keys(child).some(k => k.includes('/*/'))) add('content', p);
+          if (['description','title'].includes(key) && typeof child === 'string') {
+            if (/eval\s*\(/i.test(child)) add('eval', p);
+            if (/<script\b/i.test(child)) add('script', p);
+          }
+          walk(child, p);
+        }
+      }
+      walk(doc, []);
+      return { found, supported: true };
+    }
+
+    // Строим форматированный текст и карту путей одновременно: одинаковые ключи
+    // в разных ветках документа получают собственные номера строк.
+    function formatDocument(value) {
+      const lines = [], locations = new Map();
+      function render(node, path, depth, prefix, suffix) {
+        locations.set(pointer(path), lines.length + 1);
+        const indent = '  '.repeat(depth);
+        if (node && typeof node === 'object' && Object.keys(node).length) {
+          const array = Array.isArray(node), entries = Object.entries(node);
+          lines.push(indent + prefix + (array ? '[' : '{'));
+          entries.forEach(([key, child], i) => render(child, path.concat(array ? Number(key) : key), depth + 1, array ? '' : JSON.stringify(key) + ': ', i < entries.length - 1 ? ',' : ''));
+          lines.push(indent + (array ? ']' : '}') + suffix);
+        } else lines.push(indent + prefix + JSON.stringify(node) + suffix);
+      }
+      render(value, [], 0, '', '');
+      return { lines, locations };
+    }
+    function lineFor(path, locations) {
+      const candidate = path.slice();
+      while (!locations.has(pointer(candidate)) && candidate.length) candidate.pop();
+      return locations.get(pointer(candidate)) || 1;
+    }
+
+    document.getElementById('validate').addEventListener('click', () => {
+      const value = input.value.trim();
+      result.replaceChildren();
+      issues.replaceChildren();
+      status.className = 'status';
+
+      if (!value) {
+        status.textContent = 'Добавьте Swagger JSON для проверки.';
+        status.classList.add('error');
+        result.textContent = 'Нет данных для отображения.';
+        issues.textContent = 'Нет данных для проверки.';
+        return;
+      }
+
+      let lines, found = [], locations;
+      try {
+        const doc = JSON.parse(value);
+        ({ lines, locations } = formatDocument(doc));
+        const validation = validateDocument(doc);
+        found = validation.found;
+        found.forEach(issue => { issue.line = lineFor(issue.path, locations); });
+        found.sort((a, b) => rank[a.level] - rank[b.level] || a.line - b.line);
+        if (!validation.supported) {
+          status.textContent = 'Версия не распознана: поддерживаются Swagger 2.0 и OpenAPI 3.0/3.1.';
+          status.classList.add('error');
+          issues.textContent = 'Проверка правил не выполнялась.';
+        } else {
+          status.textContent = found.length ? 'Найдено замечаний: ' + found.length : 'По реализованным правилам замечаний не найдено.';
+          status.classList.add(found.length ? 'error' : 'success');
+          if (!found.length) issues.textContent = 'Замечаний по реализованным правилам нет.';
+        }
+      } catch (error) {
+        lines = input.value.split(/\r\n|\r|\n/);
+        status.textContent = 'Некорректный JSON: ' + error.message;
+        status.classList.add('error');
+        issues.textContent = 'Проверка правил не выполнялась: исправьте синтаксис JSON.';
+      }
+
+      found.forEach(issue => {
+        const [title, label, description] = rules[issue.rule];
+        const details = document.createElement('details');
+        details.className = issue.level;
+        const summary = document.createElement('summary');
+        summary.append(document.createTextNode(title));
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = label;
+        summary.append(badge);
+        const body = document.createElement('div');
+        body.className = 'issue-body';
+        const text = document.createElement('p');
+        text.textContent = description + (issue.detail ? ' ' + issue.detail : '');
+        const link = document.createElement('a');
+        link.href = '#result-line-' + issue.line;
+        link.textContent = 'Строка ' + issue.line;
+        link.addEventListener('click', event => {
+          event.preventDefault();
+          document.getElementById('result-line-' + issue.line).scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+        body.append(text, link);
+        details.append(summary, body);
+        issues.append(details);
+      });
+      const lineLevels = new Map();
+      found.forEach(issue => {
+        const previous = lineLevels.get(issue.line);
+        if (!previous || rank[issue.level] < rank[previous]) lineLevels.set(issue.line, issue.level);
+      });
+      const code = document.createElement('div');
+      code.className = 'code';
+      lines.forEach((text, index) => {
+        const line = document.createElement('div');
+        const number = document.createElement('span');
+        const content = document.createElement('span');
+        line.className = 'line';
+        line.id = 'result-line-' + (index + 1);
+        if (lineLevels.has(index + 1)) line.classList.add(lineLevels.get(index + 1));
+        number.className = 'number';
+        number.setAttribute('aria-hidden', 'true');
+        number.textContent = index + 1;
+        content.className = 'content';
+        content.textContent = text || ' ';
+        line.append(number, content);
+        code.append(line);
+      });
+      result.append(code);
+    });
+  </script>
+</body>
+</html>
