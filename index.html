@@ -63,6 +63,8 @@
         <button id="validate" type="button">Провалидировать</button>
         <span id="status" class="status" role="status" aria-live="polite"></span>
       </div>
+      <p><label><input type="checkbox" id="extended"> Включить дополнительные правила из справочника</label></p>
+      <p class="hint">По умолчанию включены только правила, наблюдавшиеся в предоставленном примере оригинального валидатора. Это не полный набор правил оригинала.</p>
     </section>
 
     <section class="card" aria-labelledby="issues-title">
@@ -114,6 +116,9 @@
       object: ['Ограничение типа object', 'Требует согласования с ИБ', 'Для object укажите additionalProperties: false либо схему дополнительных свойств.'],
       maxProperties: ['Ограничение additionalProperties', 'Требует согласования с ИБ', 'Если additionalProperties разрешены схемой, необходимо указать maxProperties.'],
       emptyObject: ['Описание атрибутов объекта', 'Предупреждение', 'Опишите схему объекта в properties или схему дополнительных атрибутов в additionalProperties.'],
+      objectProperties: ['Описание свойств объекта', 'Требует согласования с ИБ', 'Для типа object необходимо наличие поля properties с описанием схемы.'],
+      dateFormat: ['Ограничение формата даты и времени', 'Предупреждение', 'Для даты и времени используйте format: date или date-time; date не поддерживается валидацией TYK, поэтому можно использовать pattern. Дата определяется приблизительно по описанию поля.'],
+      tykFormat: ['Ограчение поля format', 'Предупреждение', 'Формат date не поддерживается валидацией TYK. При публикации на TYK скорректируйте format.'],
       intMax: ['Ограничение максимального значения для числового типа параметра', 'Критичная', 'Для integer значение maximum должно быть от -999999999999999 до 999999999999999.'],
       intMin: ['Ограничение минимального значения для числового типа параметра', 'Критичная', 'Для integer значение minimum должно быть от -999999999999999 до 999999999999999.'],
       range: ['Ограничение макс. и мин. значения для числового типа параметра', 'Критичная', 'Для integer значение maximum должно быть больше minimum.'],
@@ -164,9 +169,13 @@
     const hasContents = value => isObject(value) && Object.keys(value).length > 0;
     const pointer = path => JSON.stringify(path);
 
-    function validateDocument(doc) {
+    function validateDocument(doc, extended = false) {
       const found = [];
-      const add = (rule, path, detail = '') => found.push({ rule, path, detail, level: severity[rules[rule][1]] });
+      // Этот профиль воспроизводит только правила, замеченные в одной выгрузке.
+      const observed = new Set(['serverVersion', 'tagDefined', 'emptyObject', 'objectProperties', 'dateFormat', 'tykFormat', 'string', 'noBody', 'length']);
+      const add = (rule, path, detail = '') => {
+        if (extended || observed.has(rule)) found.push({ rule, path, detail, level: severity[rules[rule][1]] });
+      };
       const oas2 = doc && doc.swagger === '2.0';
       const oas3 = doc && typeof doc.openapi === 'string' && /^3\.(0|1)\.\d+/.test(doc.openapi);
       if (!isObject(doc) || (!oas2 && !oas3)) return { found, supported: false };
@@ -271,8 +280,10 @@
         if (inSchemaArea) {
           if (value.type === 'string' && value.format === 'uuid') add('uuid', path.concat('format'));
           if (value.type === 'string') {
-            if (typeof value.maxLength === 'number' && value.maxLength > 255) add('length', path.concat('maxLength'));
-            if (value.maxLength === undefined && !(Array.isArray(value.enum) && value.enum.length) && !['date','date-time'].includes(value.format) && !nonempty(value.pattern)) add('string', path);
+            if (typeof value.maxLength === 'number' && value.maxLength > 255) add('length', path);
+            if (value.maxLength === undefined && !(Array.isArray(value.enum) && value.enum.length) && !(extended ? ['date','date-time'].includes(value.format) : nonempty(value.format)) && !nonempty(value.pattern)) add('string', path);
+            if (value.format === 'date') add('tykFormat', path.concat('format'));
+            if (section === 'components' && /дата/i.test(value.description || '') && !['date','date-time'].includes(value.format) && !nonempty(value.pattern)) add('dateFormat', path);
           }
           if (['integer','number'].includes(value.type) && !(Array.isArray(value.enum) && value.enum.length) && (typeof value.minimum !== 'number' || typeof value.maximum !== 'number')) add('numeric', path);
           if (value.type === 'integer') {
@@ -294,6 +305,7 @@
             if (value.additionalProperties !== false && !hasContents(value.additionalProperties)) add('object', path);
             if (hasContents(value.additionalProperties) && value.maxProperties === undefined) add('maxProperties', path);
             if (!hasContents(value.properties) && !hasContents(value.additionalProperties)) add('emptyObject', path);
+            if (oas3 && section === 'components' && !hasContents(value.properties)) add('objectProperties', path);
           }
           if (value.type === 'file' || (value.type === 'string' && value.format === 'binary')) add('file', path);
           if (value.in && value.name && !value.$ref && !nonempty(value.description)) add('parameterDescription', path);
@@ -366,7 +378,7 @@
       try {
         const doc = JSON.parse(value);
         ({ lines, locations } = formatDocument(doc));
-        const validation = validateDocument(doc);
+        const validation = validateDocument(doc, document.getElementById('extended').checked);
         found = validation.found;
         found.forEach(issue => { issue.line = lineFor(issue.path, locations); });
         found.sort((a, b) => rank[a.level] - rank[b.level] || a.line - b.line);
